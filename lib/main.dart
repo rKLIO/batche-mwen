@@ -34,18 +34,55 @@ class _HomeMapPageState extends State<HomeMapPage> {
   GoogleMapController? mapController;
   BitmapDescriptor? _customIcon;
   bool _locationLoaded = false;
-  LatLng _currentPosition = const LatLng(48.8566, 2.3522); // Paris (exemple)
+  LatLng _currentPosition = const LatLng(48.8566, 2.3522);
   final Set<Marker> _markers = {};
+
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _startController = TextEditingController();
+  final TextEditingController _endController = TextEditingController();
+  TimeOfDay? _selectedTime;
+
+  final DraggableScrollableController _sheetController = DraggableScrollableController();
 
   @override
   void initState() {
     super.initState();
+    _determinePosition();
     _loadCustomMarker();
   }
 
   @override
   void dispose() {
+    _startController.dispose();
+    _endController.dispose();
     super.dispose();
+  }
+
+  Future<void> _determinePosition() async {
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.deniedForever ||
+          permission == LocationPermission.denied) return;
+    }
+
+    Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high);
+
+    setState(() {
+      _currentPosition = LatLng(position.latitude, position.longitude);
+      _locationLoaded = true;
+    });
+
+    if (mapController != null) {
+      mapController?.animateCamera(CameraUpdate.newLatLng(_currentPosition));
+    }
   }
 
   Future<void> _loadCustomMarker() async {
@@ -59,8 +96,8 @@ class _HomeMapPageState extends State<HomeMapPage> {
 
   void _addMarkers() {
     final positions = [
-      LatLng(48.8584, 2.2945), // Tour Eiffel
-      LatLng(48.8606, 2.3376), // Louvre
+      LatLng(48.8584, 2.2945),
+      LatLng(48.8606, 2.3376),
     ];
 
     for (int i = 0; i < positions.length; i++) {
@@ -77,22 +114,186 @@ class _HomeMapPageState extends State<HomeMapPage> {
   void _onMapCreated(GoogleMapController controller) {
     mapController = controller;
     if (_locationLoaded) {
-      mapController?.animateCamera(
-        CameraUpdate.newLatLng(_currentPosition),
-      );
+      mapController?.animateCamera(CameraUpdate.newLatLng(_currentPosition));
     }
+  }
+
+  void _showSearchTripSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: StatefulBuilder(
+            builder: (context, setModalState) {
+              return Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Form(
+                  key: _formKey,
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      const Center(child: Icon(Icons.drag_handle)),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Rechercher un trajet',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 20),
+                      TextFormField(
+                        controller: _startController,
+                        decoration: const InputDecoration(
+                          labelText: 'Lieu de départ',
+                          prefixIcon: Icon(Icons.location_on),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) =>
+                            (value == null || value.isEmpty)
+                                ? 'Veuillez entrer un lieu'
+                                : null,
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _endController,
+                        decoration: const InputDecoration(
+                          labelText: 'Lieu d\'arrivée',
+                          prefixIcon: Icon(Icons.location_on_outlined),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) =>
+                            (value == null || value.isEmpty)
+                                ? 'Veuillez entrer un lieu'
+                                : null,
+                      ),
+                      const SizedBox(height: 16),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.access_time),
+                        title: Text(
+                          _selectedTime == null
+                              ? 'Heure de départ'
+                              : 'Heure choisie : ${_selectedTime!.format(context)}',
+                        ),
+                        trailing: ElevatedButton(
+                          onPressed: () async {
+                            final picked = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay.now(),
+                            );
+                            if (picked != null) {
+                              setModalState(() {
+                                _selectedTime = picked;
+                              });
+                            }
+                          },
+                          child: const Text('Sélectionner'),
+                        ),
+                      ),
+                      const SizedBox(height: 30),
+                      ElevatedButton(
+                        onPressed: () {
+                          if (_formKey.currentState!.validate()) {
+                            if (_selectedTime == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content:
+                                        Text('Veuillez choisir une heure')),
+                              );
+                              return;
+                            }
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    'Recherche lancée : ${_startController.text} → ${_endController.text} à ${_selectedTime!.format(context)}'),
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text('Rechercher'),
+                      ),
+                      const SizedBox(height: 10),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Annuler'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMenu(ScrollController scrollController) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: ListView(
+        controller: scrollController,
+        children: [
+          const SizedBox(height: 10),
+          const Center(child: Icon(Icons.drag_handle)),
+          const SizedBox(height: 10),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.search),
+            label: const Text("Rechercher un trajet"),
+            onPressed: () => _showSearchTripSheet(context),
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+            ),
+          ),
+          const SizedBox(height: 10),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.directions_car),
+            label: const Text("Proposer un trajet"),
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Fonctionnalité à venir')),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: Text("Derniers trajets",
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          for (int i = 0; i < 5; i++)
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: Text("Trajet #${i + 1}"),
+              subtitle: const Text("Départ → Arrivée"),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      drawer: Drawer( // Menu latéral
+      drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
           children: const [
             DrawerHeader(
               decoration: BoxDecoration(color: Colors.teal),
-              child: Text('Menu', style: TextStyle(color: Colors.white, fontSize: 24)),
+              child: Text('Menu',
+                  style: TextStyle(color: Colors.white, fontSize: 24)),
             ),
             ListTile(
               leading: Icon(Icons.person),
@@ -132,6 +333,7 @@ class _HomeMapPageState extends State<HomeMapPage> {
             myLocationButtonEnabled: true,
           ),
           DraggableScrollableSheet(
+            controller: _sheetController,
             initialChildSize: 0.1,
             minChildSize: 0.1,
             maxChildSize: 0.5,
@@ -142,32 +344,7 @@ class _HomeMapPageState extends State<HomeMapPage> {
                   borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
                   boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 10)],
                 ),
-                child: ListView(
-                  controller: scrollController,
-                  children: [
-                    const SizedBox(height: 10),
-                    const Center(child: Icon(Icons.drag_handle)),
-                    const ListTile(
-                      leading: Icon(Icons.search),
-                      title: Text("Rechercher un trajet"),
-                    ),
-                    const ListTile(
-                      leading: Icon(Icons.directions_car),
-                      title: Text("Proposer un trajet"),
-                    ),
-                    const Divider(),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8),
-                      child: Text("Derniers trajets", style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                    for (int i = 0; i < 5; i++) // Liste statique de 5 trajets
-                      ListTile(
-                        leading: const Icon(Icons.history),
-                        title: Text("Trajet #${i + 1}"),
-                        subtitle: const Text("Départ → Arrivée"),
-                      ),
-                  ],
-                ),
+                child: _buildMenu(scrollController),
               );
             },
           ),
