@@ -48,6 +48,9 @@ class _HomeMapPageState extends State<HomeMapPage> {
   String? _distance;
   String? _duration;
 
+  LatLng? _startLatLng;
+  LatLng? _endLatLng;
+
   final DraggableScrollableController _sheetController = DraggableScrollableController();
 
   @override
@@ -96,32 +99,7 @@ class _HomeMapPageState extends State<HomeMapPage> {
       const ImageConfiguration(size: Size(48, 48)),
       'assets/marker.png',
     );
-    _addMarkers();
     setState(() {});
-  }
-
-  void _addMarkers() {
-    final positions = [
-      LatLng(48.8584, 2.2945),
-      LatLng(48.8606, 2.3376),
-    ];
-
-    for (int i = 0; i < positions.length; i++) {
-      _markers.add(
-        Marker(
-          markerId: MarkerId('marker_$i'),
-          position: positions[i],
-          icon: _customIcon ?? BitmapDescriptor.defaultMarker,
-        ),
-      );
-    }
-  }
-
-  void _onMapCreated(GoogleMapController controller) {
-    mapController = controller;
-    if (_locationLoaded) {
-      mapController?.animateCamera(CameraUpdate.newLatLng(_currentPosition));
-    }
   }
 
   Future<LatLng?> getCoordinatesFromAddress(String address) async {
@@ -220,23 +198,24 @@ class _HomeMapPageState extends State<HomeMapPage> {
                     children: [
                       const Center(child: Icon(Icons.drag_handle)),
                       const SizedBox(height: 10),
-                      Text(
-                        'Rechercher un trajet',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                        textAlign: TextAlign.center,
-                      ),
+                      Text('Rechercher un trajet', style: Theme.of(context).textTheme.headlineSmall, textAlign: TextAlign.center),
                       const SizedBox(height: 20),
                       TextFormField(
                         controller: _startController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Lieu de départ',
-                          prefixIcon: Icon(Icons.location_on),
-                          border: OutlineInputBorder(),
+                          prefixIcon: const Icon(Icons.location_on),
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.my_location),
+                            onPressed: () async {
+                              final pos = await Geolocator.getCurrentPosition();
+                              _startLatLng = LatLng(pos.latitude, pos.longitude);
+                              _startController.text = 'Ma position actuelle';
+                            },
+                          ),
+                          border: const OutlineInputBorder(),
                         ),
-                        validator: (value) =>
-                            (value == null || value.isEmpty)
-                                ? 'Veuillez entrer un lieu'
-                                : null,
+                        validator: (value) => (value == null || value.isEmpty) ? 'Veuillez entrer un lieu' : null,
                       ),
                       const SizedBox(height: 16),
                       TextFormField(
@@ -246,20 +225,13 @@ class _HomeMapPageState extends State<HomeMapPage> {
                           prefixIcon: Icon(Icons.location_on_outlined),
                           border: OutlineInputBorder(),
                         ),
-                        validator: (value) =>
-                            (value == null || value.isEmpty)
-                                ? 'Veuillez entrer un lieu'
-                                : null,
+                        validator: (value) => (value == null || value.isEmpty) ? 'Veuillez entrer un lieu' : null,
                       ),
                       const SizedBox(height: 16),
                       ListTile(
                         contentPadding: EdgeInsets.zero,
                         leading: const Icon(Icons.access_time),
-                        title: Text(
-                          _selectedTime == null
-                              ? 'Heure de départ'
-                              : 'Heure choisie : ${_selectedTime!.format(context)}',
-                        ),
+                        title: Text(_selectedTime == null ? 'Heure de départ' : 'Heure choisie : ${_selectedTime!.format(context)}'),
                         trailing: ElevatedButton(
                           onPressed: () async {
                             final picked = await showTimePicker(
@@ -280,28 +252,27 @@ class _HomeMapPageState extends State<HomeMapPage> {
                         onPressed: () async {
                           if (_formKey.currentState!.validate()) {
                             if (_selectedTime == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content:
-                                        Text('Veuillez choisir une heure')),
-                              );
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Veuillez choisir une heure')));
                               return;
                             }
-                            final start = await getCoordinatesFromAddress(_startController.text);
-                            final end = await getCoordinatesFromAddress(_endController.text);
-                            if (start == null || end == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Adresse non trouvée')),
-                              );
+
+                            if (_startLatLng == null) {
+                              _startLatLng = await getCoordinatesFromAddress(_startController.text);
+                            }
+                            _endLatLng = await getCoordinatesFromAddress(_endController.text);
+
+                            if (_startLatLng == null || _endLatLng == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Adresse non trouvée')));
                               return;
                             }
+
                             Navigator.pop(context);
                             setState(() {
                               _markers.clear();
-                              _markers.add(Marker(markerId: const MarkerId('start'), position: start));
-                              _markers.add(Marker(markerId: const MarkerId('end'), position: end));
+                              _markers.add(Marker(markerId: const MarkerId('start'), position: _startLatLng!));
+                              _markers.add(Marker(markerId: const MarkerId('end'), position: _endLatLng!));
                             });
-                            await drawRoute(start, end);
+                            await drawRoute(_startLatLng!, _endLatLng!);
                           }
                         },
                         child: const Text('Rechercher'),
@@ -335,29 +306,22 @@ class _HomeMapPageState extends State<HomeMapPage> {
             icon: const Icon(Icons.search),
             label: const Text("Rechercher un trajet"),
             onPressed: () => _showSearchTripSheet(context),
-            style: ElevatedButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-            ),
+            style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
           ),
           const SizedBox(height: 10),
           ElevatedButton.icon(
             icon: const Icon(Icons.directions_car),
             label: const Text("Proposer un trajet"),
             onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Fonctionnalité à venir')),
-              );
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Fonctionnalité à venir')));
             },
-            style: ElevatedButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-            ),
+            style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
           ),
           const SizedBox(height: 20),
           const Divider(),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            child: Text("Derniers trajets",
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            child: Text("Derniers trajets", style: TextStyle(fontWeight: FontWeight.bold)),
           ),
           for (int i = 0; i < 5; i++)
             ListTile(
@@ -379,21 +343,11 @@ class _HomeMapPageState extends State<HomeMapPage> {
           children: const [
             DrawerHeader(
               decoration: BoxDecoration(color: Colors.teal),
-              child: Text('Menu',
-                  style: TextStyle(color: Colors.white, fontSize: 24)),
+              child: Text('Menu', style: TextStyle(color: Colors.white, fontSize: 24)),
             ),
-            ListTile(
-              leading: Icon(Icons.person),
-              title: Text('Profil'),
-            ),
-            ListTile(
-              leading: Icon(Icons.settings),
-              title: Text('Paramètres'),
-            ),
-            ListTile(
-              leading: Icon(Icons.support),
-              title: Text('Support'),
-            ),
+            ListTile(leading: Icon(Icons.person), title: Text('Profil')),
+            ListTile(leading: Icon(Icons.settings), title: Text('Paramètres')),
+            ListTile(leading: Icon(Icons.support), title: Text('Support')),
           ],
         ),
       ),
@@ -410,15 +364,36 @@ class _HomeMapPageState extends State<HomeMapPage> {
       body: Stack(
         children: [
           GoogleMap(
-            onMapCreated: _onMapCreated,
-            initialCameraPosition: CameraPosition(
-              target: _currentPosition,
-              zoom: 12.0,
-            ),
+            onMapCreated: (controller) {
+              mapController = controller;
+            },
+            initialCameraPosition: CameraPosition(target: _currentPosition, zoom: 12.0),
             markers: _markers,
             polylines: _polylines,
             myLocationEnabled: true,
             myLocationButtonEnabled: true,
+            onTap: (LatLng tappedPoint) async {
+              if (_startLatLng == null) {
+                setState(() {
+                  _startLatLng = tappedPoint;
+                  _markers.add(Marker(markerId: const MarkerId('start'), position: tappedPoint));
+                });
+              } else if (_endLatLng == null) {
+                setState(() {
+                  _endLatLng = tappedPoint;
+                  _markers.add(Marker(markerId: const MarkerId('end'), position: tappedPoint));
+                });
+                await drawRoute(_startLatLng!, _endLatLng!);
+              } else {
+                setState(() {
+                  _startLatLng = tappedPoint;
+                  _endLatLng = null;
+                  _markers.clear();
+                  _polylines.clear();
+                  _markers.add(Marker(markerId: const MarkerId('start'), position: tappedPoint));
+                });
+              }
+            },
           ),
           if (_distance != null && _duration != null)
             Positioned(
@@ -429,10 +404,7 @@ class _HomeMapPageState extends State<HomeMapPage> {
                 color: Colors.white,
                 child: Padding(
                   padding: const EdgeInsets.all(12.0),
-                  child: Text(
-                    'Distance : $_distance | Durée : $_duration',
-                    style: const TextStyle(fontSize: 16),
-                  ),
+                  child: Text('Distance : $_distance | Durée : $_duration', style: const TextStyle(fontSize: 16)),
                 ),
               ),
             ),
