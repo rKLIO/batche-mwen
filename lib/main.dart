@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 void main() {
   runApp(const MyApp());
@@ -36,11 +38,15 @@ class _HomeMapPageState extends State<HomeMapPage> {
   bool _locationLoaded = false;
   LatLng _currentPosition = const LatLng(48.8566, 2.3522);
   final Set<Marker> _markers = {};
+  final Set<Polyline> _polylines = {};
 
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _startController = TextEditingController();
   final TextEditingController _endController = TextEditingController();
   TimeOfDay? _selectedTime;
+
+  String? _distance;
+  String? _duration;
 
   final DraggableScrollableController _sheetController = DraggableScrollableController();
 
@@ -116,6 +122,79 @@ class _HomeMapPageState extends State<HomeMapPage> {
     if (_locationLoaded) {
       mapController?.animateCamera(CameraUpdate.newLatLng(_currentPosition));
     }
+  }
+
+  Future<LatLng?> getCoordinatesFromAddress(String address) async {
+    final apiKey = 'AIzaSyC6WGs0R4omeJlaqkWFa6WWOt41CuDMHCc';
+    final url = Uri.parse(
+      'https://maps.googleapis.com/maps/api/geocode/json?address=${Uri.encodeComponent(address)}&key=$apiKey',
+    );
+
+    final response = await http.get(url);
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      if (data['status'] == 'OK') {
+        final location = data['results'][0]['geometry']['location'];
+        return LatLng(location['lat'], location['lng']);
+      }
+    }
+    return null;
+  }
+
+  Future<void> drawRoute(LatLng start, LatLng end) async {
+    final apiKey = 'AIzaSyC6WGs0R4omeJlaqkWFa6WWOt41CuDMHCc';
+    final url = Uri.parse(
+      'https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=$apiKey',
+    );
+
+    final response = await http.get(url);
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final points = _decodePolyline(data['routes'][0]['overview_polyline']['points']);
+      final leg = data['routes'][0]['legs'][0];
+
+      setState(() {
+        _distance = leg['distance']['text'];
+        _duration = leg['duration']['text'];
+        _polylines.clear();
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('route'),
+          color: Colors.blue,
+          width: 5,
+          points: points,
+        ));
+      });
+    }
+  }
+
+  List<LatLng> _decodePolyline(String encoded) {
+    List<LatLng> polyline = [];
+    int index = 0, len = encoded.length;
+    int lat = 0, lng = 0;
+
+    while (index < len) {
+      int b, shift = 0, result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+
+      polyline.add(LatLng(lat / 1e5, lng / 1e5));
+    }
+    return polyline;
   }
 
   void _showSearchTripSheet(BuildContext context) {
@@ -198,7 +277,7 @@ class _HomeMapPageState extends State<HomeMapPage> {
                       ),
                       const SizedBox(height: 30),
                       ElevatedButton(
-                        onPressed: () {
+                        onPressed: () async {
                           if (_formKey.currentState!.validate()) {
                             if (_selectedTime == null) {
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -208,13 +287,21 @@ class _HomeMapPageState extends State<HomeMapPage> {
                               );
                               return;
                             }
+                            final start = await getCoordinatesFromAddress(_startController.text);
+                            final end = await getCoordinatesFromAddress(_endController.text);
+                            if (start == null || end == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Adresse non trouvée')),
+                              );
+                              return;
+                            }
                             Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                    'Recherche lancée : ${_startController.text} → ${_endController.text} à ${_selectedTime!.format(context)}'),
-                              ),
-                            );
+                            setState(() {
+                              _markers.clear();
+                              _markers.add(Marker(markerId: const MarkerId('start'), position: start));
+                              _markers.add(Marker(markerId: const MarkerId('end'), position: end));
+                            });
+                            await drawRoute(start, end);
                           }
                         },
                         child: const Text('Rechercher'),
@@ -329,9 +416,26 @@ class _HomeMapPageState extends State<HomeMapPage> {
               zoom: 12.0,
             ),
             markers: _markers,
+            polylines: _polylines,
             myLocationEnabled: true,
             myLocationButtonEnabled: true,
           ),
+          if (_distance != null && _duration != null)
+            Positioned(
+              top: 20,
+              left: 20,
+              right: 20,
+              child: Card(
+                color: Colors.white,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Text(
+                    'Distance : $_distance | Durée : $_duration',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
+            ),
           DraggableScrollableSheet(
             controller: _sheetController,
             initialChildSize: 0.1,
